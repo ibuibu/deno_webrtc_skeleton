@@ -8,4 +8,4 @@ serve((req) => {
   });
 
   return response;
-});
+}, { port: parseInt(Deno.env.get('PORT') ?? '') || 443 });
