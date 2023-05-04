@@ -11,7 +11,6 @@ serve(
 
       if (mes.type === "join") {
         const members = rooms.get(mes.roomId);
-        // console.log({ wss: members });
         if (members) {
           members.forEach((member) => {
             member.send(JSON.stringify({ type: "offer", sdp: mes.sdp }));
@@ -22,7 +21,6 @@ serve(
         } else {
           rooms.set(mes.roomId, [ws]);
         }
-        // console.log({ rooms });
       }
 
       if (mes.type === "answer") {
@@ -36,7 +34,10 @@ serve(
     });
 
     ws.onclose = () => {
-
+      for (const [roomId, members] of rooms.entries()) {
+        const newMembers = members.filter((m) => m !== ws);
+        rooms.set(roomId, newMembers);
+      }
     };
 
     return response;
