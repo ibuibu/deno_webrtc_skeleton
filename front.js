@@ -1,6 +1,7 @@
 const URL = location.href.replace("http", "ws") + "ws";
 
-let pc, localStream, ws, offerSdp, roomId;
+let localStream, ws, roomId, clientId;
+let pcs = [];
 
 const gUMtoDOM = async (targetDOM) => {
   const videoAndAudioStream = await navigator.mediaDevices.getUserMedia({
@@ -20,7 +21,7 @@ const makeOffer = async (stream) => {
   return pc;
 };
 
-const makeAnswer = async (theirSdp, stream) => {
+const makeAnswer = async (theirSdp, stream, targetClientId) => {
   const pc = await preparePeerConnection(stream);
   const theirOffer = new RTCSessionDescription({
     type: "offer",
@@ -29,14 +30,32 @@ const makeAnswer = async (theirSdp, stream) => {
   pc.setRemoteDescription(theirOffer);
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
-  vanillaIce(pc, true);
+  // vanillaIce(pc, true);
+  pc.addEventListener("icecandidate", (ev) => {
+    if (ev.candidate === null) {
+      ws.send(
+        JSON.stringify({
+          type: "answer",
+          srcClientId: clientId,
+          targetClientId,
+          roomId,
+          sdp: pc.localDescription.sdp,
+        })
+      );
+    }
+  });
+  return pc;
 };
 
 const preparePeerConnection = async (stream) => {
   const pc = new RTCPeerConnection({ iceServers: [] });
   pc.addEventListener("track", (ev) => {
-    console.log("get remote video");
-    document.getElementById("remote-video").srcObject = ev.streams[0];
+    if (ev.track.kind === "video") {
+      const v = document.createElement("video");
+      v.srcObject = ev.streams[0];
+      v.autoplay = true;
+      document.getElementById("remote-video").appendChild(v);
+    }
   });
   for (const track of stream.getTracks()) {
     pc.addTrack(track, stream);
@@ -51,12 +70,11 @@ const vanillaIce = (pc, isAnswer) => {
         ws.send(
           JSON.stringify({
             type: "answer",
+            srcClientId: clientId,
             roomId,
             sdp: pc.localDescription.sdp,
           })
         );
-      } else {
-        offerSdp = pc.localDescription.sdp;
       }
     }
   });
@@ -64,13 +82,12 @@ const vanillaIce = (pc, isAnswer) => {
 
 document.getElementById("join").addEventListener("click", () => {
   roomId = document.getElementById("room-id").value;
-  ws.send(JSON.stringify({ type: "join", roomId, sdp: offerSdp }));
+  ws.send(JSON.stringify({ type: "join", srcClientId: clientId, roomId }));
 });
 
 (async function () {
   const myVideoElm = document.getElementById("my-video");
   localStream = await gUMtoDOM(myVideoElm);
-  pc = await makeOffer(localStream);
 
   ws = new WebSocket(URL);
 
@@ -78,11 +95,30 @@ document.getElementById("join").addEventListener("click", () => {
     console.log("ws opened");
   };
 
-  ws.onmessage = (message) => {
+  ws.onmessage = async (message) => {
     const mes = JSON.parse(message.data);
+    console.log({ mes });
+
+    if (mes.type === "clientId") {
+      clientId = mes.clientId;
+    }
+
+    if (mes.type === "join") {
+      const pc = await makeOffer(localStream);
+      ws.send(
+        JSON.stringify({
+          type: "offer",
+          srcClientId: clientId,
+          targetClientId: mes.srcClientId,
+          roomId,
+          sdp: pc.localDescription.sdp,
+        })
+      );
+      pcs.push(pc);
+    }
 
     if (mes.type === "offer") {
-      makeAnswer(mes.sdp, localStream);
+      pcs.push(await makeAnswer(mes.sdp, localStream, mes.srcClientId));
     }
 
     if (mes.type === "answer") {
@@ -90,7 +126,9 @@ document.getElementById("join").addEventListener("click", () => {
         type: "answer",
         sdp: mes.sdp,
       });
-      pc.setRemoteDescription(answerOffer);
+      pcs.forEach((pc) => {
+        pc.setRemoteDescription(answerOffer);
+      });
     }
   };
 
