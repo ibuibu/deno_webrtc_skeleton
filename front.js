@@ -1,6 +1,7 @@
 const URL = location.href.replace("http", "ws") + "ws";
 
-let pc, localStream, ws, offerSdp, roomId;
+let ws, roomId, clientId;
+const pcs = {};
 
 const gUMtoDOM = async (targetDOM) => {
   const videoAndAudioStream = await navigator.mediaDevices.getUserMedia({
@@ -12,16 +13,15 @@ const gUMtoDOM = async (targetDOM) => {
   return videoAndAudioStream;
 };
 
-const makeOffer = async (stream) => {
-  const pc = await preparePeerConnection(stream);
+const makeOffer = async (stream, targetClientId) => {
+  const pc = preparePeerConnection(stream, targetClientId);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  vanillaIce(pc, false);
   return pc;
 };
 
-const makeAnswer = async (theirSdp, stream) => {
-  const pc = await preparePeerConnection(stream);
+const makeAnswer = async (theirSdp, stream, targetClientId) => {
+  const pc = preparePeerConnection(stream, targetClientId);
   const theirOffer = new RTCSessionDescription({
     type: "offer",
     sdp: theirSdp,
@@ -29,14 +29,20 @@ const makeAnswer = async (theirSdp, stream) => {
   pc.setRemoteDescription(theirOffer);
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
-  vanillaIce(pc, true);
+  return pc;
 };
 
-const preparePeerConnection = async (stream) => {
+const preparePeerConnection = (stream, clientId) => {
   const pc = new RTCPeerConnection({ iceServers: [] });
   pc.addEventListener("track", (ev) => {
-    console.log("get remote video");
-    document.getElementById("remote-video").srcObject = ev.streams[0];
+    if (ev.track.kind === "video") {
+      const v = document.createElement("video");
+      v.srcObject = ev.streams[0];
+      v.autoplay = true;
+      v.width = 300;
+      v.id = clientId;
+      document.getElementById("remote-video").appendChild(v);
+    }
   });
   for (const track of stream.getTracks()) {
     pc.addTrack(track, stream);
@@ -44,53 +50,69 @@ const preparePeerConnection = async (stream) => {
   return pc;
 };
 
-const vanillaIce = (pc, isAnswer) => {
-  pc.addEventListener("icecandidate", (ev) => {
-    if (ev.candidate === null) {
-      if (isAnswer) {
-        ws.send(
-          JSON.stringify({
-            type: "answer",
-            roomId,
-            sdp: pc.localDescription.sdp,
-          })
-        );
-      } else {
-        offerSdp = pc.localDescription.sdp;
-      }
-    }
-  });
-};
-
 document.getElementById("join").addEventListener("click", () => {
   roomId = document.getElementById("room-id").value;
-  ws.send(JSON.stringify({ type: "join", roomId, sdp: offerSdp }));
+  ws.send(JSON.stringify({ type: "join", srcClientId: clientId, roomId }));
 });
 
 (async function () {
   const myVideoElm = document.getElementById("my-video");
-  localStream = await gUMtoDOM(myVideoElm);
-  pc = await makeOffer(localStream);
+  const localStream = await gUMtoDOM(myVideoElm);
 
   ws = new WebSocket(URL);
 
-  ws.onopen = () => {
-    console.log("ws opened");
-  };
-
-  ws.onmessage = (message) => {
+  ws.onmessage = async (message) => {
     const mes = JSON.parse(message.data);
 
+    if (mes.type === "clientId") {
+      clientId = mes.clientId;
+    }
+
+    if (mes.type === "join") {
+      const pc = await makeOffer(localStream, mes.srcClientId);
+      ws.send(
+        JSON.stringify({
+          type: "offer",
+          srcClientId: clientId,
+          targetClientId: mes.srcClientId,
+          roomId,
+          sdp: pc.localDescription.sdp,
+        })
+      );
+      pcs[mes.srcClientId] = pc;
+    }
+
     if (mes.type === "offer") {
-      makeAnswer(mes.sdp, localStream);
+      const pc = await makeAnswer(mes.sdp, localStream, mes.srcClientId);
+      pc.addEventListener("icecandidate", (ev) => {
+        if (ev.candidate === null) {
+          ws.send(
+            JSON.stringify({
+              type: "answer",
+              srcClientId: clientId,
+              targetClientId: mes.srcClientId,
+              roomId,
+              sdp: pc.localDescription.sdp,
+            })
+          );
+        }
+      });
+      pcs[mes.srcClientId] = pc;
     }
 
     if (mes.type === "answer") {
-      const answerOffer = new RTCSessionDescription({
+      const theirAnswer = new RTCSessionDescription({
         type: "answer",
         sdp: mes.sdp,
       });
-      pc.setRemoteDescription(answerOffer);
+      pcs[mes.srcClientId].setRemoteDescription(theirAnswer);
+    }
+
+    if (mes.type === "leave") {
+      const videoElm = document.getElementById(mes.clientId);
+      document.getElementById("remote-video").removeChild(videoElm);
+      pcs[mes.clientId].close();
+      delete pcs[mes.clientId];
     }
   };
 
