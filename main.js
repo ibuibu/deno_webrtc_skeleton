@@ -10,7 +10,6 @@ serve(
     const url = new URL(req.url);
 
     switch (url.pathname) {
-
       case "/":
         const html = await Deno.readFile("./index.html");
         return new Response(html);
@@ -44,8 +43,8 @@ serve(
           }
 
           if (mes.type === "offer") {
-            const ws = clients.get(mes.targetClientId);
-            ws.send(
+            const targetWs = clients.get(mes.targetClientId);
+            targetWs.send(
               JSON.stringify({
                 type: "offer",
                 srcClientId: mes.srcClientId,
@@ -55,8 +54,8 @@ serve(
           }
 
           if (mes.type === "answer") {
-            const ws = clients.get(mes.targetClientId);
-            ws.send(
+            const targetWs = clients.get(mes.targetClientId);
+            targetWs.send(
               JSON.stringify({
                 type: "answer",
                 srcClientId: mes.srcClientId,
@@ -71,11 +70,20 @@ serve(
         };
 
         ws.onclose = () => {
-          console.log({ clientId });
-          clients.delete(clientId);
-          console.log({ clients });
+          let leavedClientId;
+          for (const [clientId, clientWs] of clients.entries()) {
+            if (clientWs === ws) {
+              clients.delete(clientId);
+              leavedClientId = clientId;
+            }
+          }
           for (const [roomId, members] of rooms.entries()) {
             const newMembers = members.filter((m) => m.ws !== ws);
+            newMembers.forEach((m) => {
+              m.ws.send(
+                JSON.stringify({ type: "leave", clientId: leavedClientId })
+              );
+            });
             rooms.set(roomId, newMembers);
           }
         };

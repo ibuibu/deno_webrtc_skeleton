@@ -1,7 +1,9 @@
 const URL = location.href.replace("http", "ws") + "ws";
 
-let localStream, ws, roomId, clientId;
-let pcs = [];
+// tsに。
+
+let ws, roomId, clientId;
+let pcs = {};
 
 const gUMtoDOM = async (targetDOM) => {
   const videoAndAudioStream = await navigator.mediaDevices.getUserMedia({
@@ -13,16 +15,15 @@ const gUMtoDOM = async (targetDOM) => {
   return videoAndAudioStream;
 };
 
-const makeOffer = async (stream) => {
-  const pc = await preparePeerConnection(stream);
+const makeOffer = async (stream, targetClientId) => {
+  const pc = await preparePeerConnection(stream, targetClientId);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  vanillaIce(pc, false);
   return pc;
 };
 
 const makeAnswer = async (theirSdp, stream, targetClientId) => {
-  const pc = await preparePeerConnection(stream);
+  const pc = await preparePeerConnection(stream, targetClientId);
   const theirOffer = new RTCSessionDescription({
     type: "offer",
     sdp: theirSdp,
@@ -30,30 +31,17 @@ const makeAnswer = async (theirSdp, stream, targetClientId) => {
   pc.setRemoteDescription(theirOffer);
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
-  // vanillaIce(pc, true);
-  pc.addEventListener("icecandidate", (ev) => {
-    if (ev.candidate === null) {
-      ws.send(
-        JSON.stringify({
-          type: "answer",
-          srcClientId: clientId,
-          targetClientId,
-          roomId,
-          sdp: pc.localDescription.sdp,
-        })
-      );
-    }
-  });
   return pc;
 };
 
-const preparePeerConnection = async (stream) => {
+const preparePeerConnection = async (stream, clientId) => {
   const pc = new RTCPeerConnection({ iceServers: [] });
   pc.addEventListener("track", (ev) => {
     if (ev.track.kind === "video") {
       const v = document.createElement("video");
       v.srcObject = ev.streams[0];
       v.autoplay = true;
+      v.id = clientId;
       document.getElementById("remote-video").appendChild(v);
     }
   });
@@ -63,23 +51,6 @@ const preparePeerConnection = async (stream) => {
   return pc;
 };
 
-const vanillaIce = (pc, isAnswer) => {
-  pc.addEventListener("icecandidate", (ev) => {
-    if (ev.candidate === null) {
-      if (isAnswer) {
-        ws.send(
-          JSON.stringify({
-            type: "answer",
-            srcClientId: clientId,
-            roomId,
-            sdp: pc.localDescription.sdp,
-          })
-        );
-      }
-    }
-  });
-};
-
 document.getElementById("join").addEventListener("click", () => {
   roomId = document.getElementById("room-id").value;
   ws.send(JSON.stringify({ type: "join", srcClientId: clientId, roomId }));
@@ -87,24 +58,19 @@ document.getElementById("join").addEventListener("click", () => {
 
 (async function () {
   const myVideoElm = document.getElementById("my-video");
-  localStream = await gUMtoDOM(myVideoElm);
+  const localStream = await gUMtoDOM(myVideoElm);
 
   ws = new WebSocket(URL);
 
-  ws.onopen = () => {
-    console.log("ws opened");
-  };
-
   ws.onmessage = async (message) => {
     const mes = JSON.parse(message.data);
-    console.log({ mes });
 
     if (mes.type === "clientId") {
       clientId = mes.clientId;
     }
 
     if (mes.type === "join") {
-      const pc = await makeOffer(localStream);
+      const pc = await makeOffer(localStream, mes.srcClientId);
       ws.send(
         JSON.stringify({
           type: "offer",
@@ -114,21 +80,40 @@ document.getElementById("join").addEventListener("click", () => {
           sdp: pc.localDescription.sdp,
         })
       );
-      pcs.push(pc);
+      pcs[mes.srcClientId] = pc;
     }
 
     if (mes.type === "offer") {
-      pcs.push(await makeAnswer(mes.sdp, localStream, mes.srcClientId));
+      const pc = await makeAnswer(mes.sdp, localStream, mes.srcClientId);
+      pc.addEventListener("icecandidate", (ev) => {
+        if (ev.candidate === null) {
+          ws.send(
+            JSON.stringify({
+              type: "answer",
+              srcClientId: clientId,
+              targetClientId: mes.srcClientId,
+              roomId,
+              sdp: pc.localDescription.sdp,
+            })
+          );
+        }
+      });
+      pcs[mes.srcClientId] = pc;
     }
 
     if (mes.type === "answer") {
-      const answerOffer = new RTCSessionDescription({
+      const theirAnswer = new RTCSessionDescription({
         type: "answer",
         sdp: mes.sdp,
       });
-      pcs.forEach((pc) => {
-        pc.setRemoteDescription(answerOffer);
-      });
+      pcs[mes.srcClientId].setRemoteDescription(theirAnswer);
+    }
+
+    if (mes.type === "leave") {
+      const videoElm = document.getElementById(mes.clientId);
+      document.getElementById("remote-video").removeChild(videoElm);
+      pcs[mes.clientId].close();
+      delete pcs[mes.clientId];
     }
   };
 
