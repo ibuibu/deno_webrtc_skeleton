@@ -1,9 +1,7 @@
 const URL = location.href.replace("http", "ws") + "ws";
 
-// tsに。
-
 let ws, roomId, clientId;
-let pcs = {};
+const pcs = {};
 
 const gUMtoDOM = async (targetDOM) => {
   const videoAndAudioStream = await navigator.mediaDevices.getUserMedia({
@@ -16,14 +14,14 @@ const gUMtoDOM = async (targetDOM) => {
 };
 
 const makeOffer = async (stream, targetClientId) => {
-  const pc = await preparePeerConnection(stream, targetClientId);
+  const pc = preparePeerConnection(stream, targetClientId);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   return pc;
 };
 
 const makeAnswer = async (theirSdp, stream, targetClientId) => {
-  const pc = await preparePeerConnection(stream, targetClientId);
+  const pc = preparePeerConnection(stream, targetClientId);
   const theirOffer = new RTCSessionDescription({
     type: "offer",
     sdp: theirSdp,
@@ -34,13 +32,14 @@ const makeAnswer = async (theirSdp, stream, targetClientId) => {
   return pc;
 };
 
-const preparePeerConnection = async (stream, clientId) => {
+const preparePeerConnection = (stream, clientId) => {
   const pc = new RTCPeerConnection({ iceServers: [] });
   pc.addEventListener("track", (ev) => {
     if (ev.track.kind === "video") {
       const v = document.createElement("video");
       v.srcObject = ev.streams[0];
       v.autoplay = true;
+      v.width = 300;
       v.id = clientId;
       document.getElementById("remote-video").appendChild(v);
     }
