@@ -33,7 +33,14 @@ const makeAnswer = async (theirSdp, stream, targetClientId) => {
 };
 
 const preparePeerConnection = (stream, clientId) => {
-  const pc = new RTCPeerConnection({ iceServers: [] });
+  let pc_config = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" },
+    ],
+  };
+  const pc = new RTCPeerConnection(pc_config);
   pc.addEventListener("track", (ev) => {
     if (ev.track.kind === "video") {
       const v = document.createElement("video");
@@ -85,17 +92,16 @@ document.getElementById("join").addEventListener("click", () => {
     if (mes.type === "offer") {
       const pc = await makeAnswer(mes.sdp, localStream, mes.srcClientId);
       pc.addEventListener("icecandidate", (ev) => {
-        if (ev.candidate === null) {
-          ws.send(
-            JSON.stringify({
-              type: "answer",
-              srcClientId: clientId,
-              targetClientId: mes.srcClientId,
-              roomId,
-              sdp: pc.localDescription.sdp,
-            })
-          );
-        }
+        if (ev.candidate !== null) return;
+        ws.send(
+          JSON.stringify({
+            type: "answer",
+            srcClientId: clientId,
+            targetClientId: mes.srcClientId,
+            roomId,
+            sdp: pc.localDescription.sdp,
+          })
+        );
       });
       pcs[mes.srcClientId] = pc;
     }
